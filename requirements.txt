@@ -1,7 +1,28 @@
-requests
-pymupdf
-sentence-transformers
-faiss-cpu
-fastapi
-uvicorn
-openai
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+python-dotenv>=1.0.1
+
+# PDF parsing (choose at least one; both included here)
+pypdf>=4.2.0
+pdfminer.six>=20231228
+
+# Embeddings + Index
+sentence-transformers>=2.6.0
+faiss-cpu>=1.8.0
+numpy>=1.26.0
+
+# LLM orchestration
+langchain>=0.2.0
+
+# Providers (install what you use)
+openai>=1.35.0
+google-generativeai>=0.7.0
+# or: langchain-google-genai>=0.1.0
+
+# Observability (optional)
+langfuse>=2.42.2
+
+# Misc
+tqdm>=4.66.0
+httpx>=0.27.0
