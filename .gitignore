@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Virtual environment
+venv/
+ENV/
+
+# Env files
+.env
+
+# SQLite DB
+*.db
+
+# VS Code
+.vscode/
