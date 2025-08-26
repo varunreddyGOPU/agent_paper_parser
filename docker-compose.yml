@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  agent-paper-parser:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - PROVIDER=local
+      - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+      - INGEST_ON_STARTUP=0
+      # Uncomment and set these for OpenAI
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - PROVIDER=openai
+      # - LLM_MODEL=gpt-4o-mini
+      # Uncomment and set these for Google Gemini
+      # - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # - PROVIDER=gemini
+      # - LLM_MODEL=gemini-1.5-flash
+    volumes:
+      - ./data:/app/data
+      - ./downloads:/app/downloads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Add a reverse proxy
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - agent-paper-parser
+    restart: unless-stopped
+    profiles:
+      - "with-proxy"
+
+volumes:
+  data:
+  downloads:

@@ -11,13 +11,45 @@ dist/
 
 # Virtual environment
 venv/
+.venv/
 ENV/
 
 # Env files
 .env
+.env.local
+.env.*.local
 
 # SQLite DB
 *.db
 
 # VS Code
 .vscode/
+
+# Data directories
+data/
+downloads/
+backups/
+
+# FAISS index files
+*.index
+metadata.json
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# macOS
+.DS_Store
+
+# IDE files
+.idea/
+*.swp
+*.swo
+
+# Docker
+.docker/

@@ -1,0 +1,165 @@
+name: Deploy Application
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      version:
+        description: 'Version to deploy (commit SHA or tag)'
+        required: false
+        default: 'main'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.inputs.version || github.ref }}
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install PyMuPDF
+    
+    - name: Create .env file
+      run: |
+        cat > .env << EOF
+        # Environment configuration
+        ENVIRONMENT=${{ github.event.inputs.environment || 'production' }}
+        HOST=0.0.0.0
+        PORT=8000
+        
+        # Database
+        DB_PATH=./data/papers.db
+        
+        # FAISS Index
+        INDEX_PATH=./data/faiss.index
+        METADATA_PATH=./data/metadata.json
+        
+        # Default provider (configure as needed)
+        PROVIDER=local
+        EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+        
+        # Set to 1 to run ingestion on startup
+        INGEST_ON_STARTUP=0
+        EOF
+    
+    - name: Initialize application
+      run: |
+        python run_init_db.py
+        echo "✓ Database initialized"
+    
+    - name: Create systemd service (example)
+      run: |
+        mkdir -p deployment
+        cat > deployment/agent-paper-parser.service << EOF
+        [Unit]
+        Description=Agent Paper Parser API
+        After=network.target
+        
+        [Service]
+        Type=simple
+        User=ubuntu
+        WorkingDirectory=/opt/agent_paper_parser
+        Environment=PATH=/opt/agent_paper_parser/.venv/bin
+        ExecStart=/opt/agent_paper_parser/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+        Restart=always
+        RestartSec=3
+        
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+    
+    - name: Create deployment package
+      run: |
+        mkdir -p deployment/package
+        tar -czf deployment/package/agent_paper_parser-${{ github.sha }}.tar.gz \
+          --exclude='.git' \
+          --exclude='.github' \
+          --exclude='__pycache__' \
+          --exclude='*.pyc' \
+          --exclude='venv' \
+          --exclude='deployment' \
+          .
+        
+        # Create deployment script
+        cat > deployment/deploy.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        APP_DIR="/opt/agent_paper_parser"
+        SERVICE_NAME="agent-paper-parser"
+        
+        echo "🚀 Deploying Agent Paper Parser..."
+        
+        # Create app directory
+        sudo mkdir -p $APP_DIR
+        sudo chown $USER:$USER $APP_DIR
+        
+        # Extract application
+        tar -xzf agent_paper_parser-*.tar.gz -C $APP_DIR
+        
+        # Set up virtual environment
+        cd $APP_DIR
+        python3 -m venv .venv
+        source .venv/bin/activate
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install PyMuPDF
+        
+        # Initialize database
+        python run_init_db.py
+        
+        # Install systemd service
+        if [ -f "deployment/agent-paper-parser.service" ]; then
+            sudo cp deployment/agent-paper-parser.service /etc/systemd/system/
+            sudo systemctl daemon-reload
+            sudo systemctl enable $SERVICE_NAME
+            sudo systemctl restart $SERVICE_NAME
+            echo "✓ Service installed and started"
+        fi
+        
+        echo "✅ Deployment complete!"
+        echo "🌐 API should be available at http://localhost:8000"
+        EOF
+        
+        chmod +x deployment/deploy.sh
+    
+    - name: Upload deployment artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: deployment-${{ github.event.inputs.environment || 'production' }}
+        path: deployment/
+        retention-days: 30
+    
+    - name: Deployment summary
+      run: |
+        echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: ${{ github.event.inputs.environment || 'production' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version**: ${{ github.event.inputs.version || github.ref }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Deployment package**: \`agent_paper_parser-${{ github.sha }}.tar.gz\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📥 Download and Deploy" >> $GITHUB_STEP_SUMMARY
+        echo "1. Download the deployment artifacts from this workflow" >> $GITHUB_STEP_SUMMARY
+        echo "2. Extract the package on your target server" >> $GITHUB_STEP_SUMMARY
+        echo "3. Run \`./deploy.sh\` to install and start the service" >> $GITHUB_STEP_SUMMARY

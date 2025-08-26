@@ -1,0 +1,311 @@
+name: Manual Tasks
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Task to run'
+        required: true
+        type: choice
+        options:
+        - test-qa-endpoint
+        - rebuild-embeddings
+        - clean-database
+        - backup-data
+        - health-check
+        - run-sample-queries
+      custom_question:
+        description: 'Custom question for QA testing'
+        required: false
+        default: 'What are the main contributions of the paper?'
+      provider:
+        description: 'LLM Provider to use'
+        required: false
+        default: 'local'
+        type: choice
+        options:
+        - local
+        - openai
+        - gemini
+
+env:
+  PROVIDER: ${{ github.event.inputs.provider }}
+  EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+
+jobs:
+  manual-task:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install PyMuPDF
+    
+    - name: Create data directory and initialize
+      run: |
+        mkdir -p data downloads
+        python run_init_db.py
+    
+    - name: Test QA Endpoint
+      if: github.event.inputs.task == 'test-qa-endpoint'
+      run: |
+        echo "🧪 Testing QA endpoint..."
+        
+        # First ensure we have some data
+        python -c "
+        from app.database import init_db
+        from app.ingestion import ingest_example
+        import logging
+        
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        try:
+            init_db()
+            ingest_example()
+            logger.info('✅ Sample data ingested')
+        except Exception as e:
+            logger.warning(f'Ingestion failed: {e}')
+        "
+        
+        # Start server in background
+        uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+        SERVER_PID=$!
+        sleep 10
+        
+        # Test QA endpoint
+        QUESTION="${{ github.event.inputs.custom_question }}"
+        echo "Testing question: $QUESTION"
+        
+        curl -X POST "http://127.0.0.1:8000/qa" \
+          -H "Content-Type: application/json" \
+          -d "{\"question\":\"$QUESTION\",\"top_k\":3,\"temperature\":0.1}" \
+          | python -m json.tool || echo "QA test failed"
+        
+        # Clean up
+        kill $SERVER_PID || true
+    
+    - name: Rebuild Embeddings
+      if: github.event.inputs.task == 'rebuild-embeddings'
+      run: |
+        echo "🔄 Rebuilding embeddings and FAISS index..."
+        python -c "
+        import logging
+        from app.embeddings import rebuild_index
+        from app.database import init_db
+        
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        try:
+            init_db()
+            rebuild_index()
+            logger.info('✅ Embeddings rebuilt successfully')
+        except Exception as e:
+            logger.error(f'❌ Rebuild failed: {e}')
+            raise
+        "
+    
+    - name: Clean Database
+      if: github.event.inputs.task == 'clean-database'
+      run: |
+        echo "🧹 Cleaning database..."
+        python -c "
+        import sqlite3
+        import os
+        import logging
+        
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        db_path = './data/papers.db'
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            
+            # Count before
+            cur.execute('SELECT COUNT(*) FROM papers')
+            before_count = cur.fetchone()[0]
+            
+            # Remove duplicates
+            cur.execute('''
+                DELETE FROM papers 
+                WHERE id NOT IN (
+                    SELECT MIN(id) 
+                    FROM papers 
+                    GROUP BY url
+                )
+            ''')
+            
+            # Count after
+            cur.execute('SELECT COUNT(*) FROM papers')
+            after_count = cur.fetchone()[0]
+            
+            conn.commit()
+            conn.close()
+            
+            removed = before_count - after_count
+            logger.info(f'✅ Removed {removed} duplicate entries. Papers remaining: {after_count}')
+        else:
+            logger.info('No database found to clean')
+        "
+    
+    - name: Backup Data
+      if: github.event.inputs.task == 'backup-data'
+      run: |
+        echo "💾 Creating data backup..."
+        
+        BACKUP_NAME="backup-$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "backups/$BACKUP_NAME"
+        
+        # Backup database
+        if [ -f "data/papers.db" ]; then
+          cp "data/papers.db" "backups/$BACKUP_NAME/"
+          echo "✓ Database backed up"
+        fi
+        
+        # Backup FAISS index
+        if [ -f "data/faiss.index" ]; then
+          cp "data/faiss.index" "backups/$BACKUP_NAME/"
+          echo "✓ FAISS index backed up"
+        fi
+        
+        # Backup metadata
+        if [ -f "data/metadata.json" ]; then
+          cp "data/metadata.json" "backups/$BACKUP_NAME/"
+          echo "✓ Metadata backed up"
+        fi
+        
+        # Create info file
+        cat > "backups/$BACKUP_NAME/backup_info.txt" << EOF
+        Backup created: $(date)
+        Commit: ${{ github.sha }}
+        Workflow: ${{ github.run_id }}
+        EOF
+        
+        echo "✅ Backup created: $BACKUP_NAME"
+    
+    - name: Health Check
+      if: github.event.inputs.task == 'health-check'
+      run: |
+        echo "🏥 Running health check..."
+        
+        python -c "
+        import os
+        import sqlite3
+        import logging
+        from app.main import app
+        from app.database import init_db
+        
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        # Check app import
+        logger.info('✓ FastAPI app imports successfully')
+        
+        # Check database
+        init_db()
+        if os.path.exists('./data/papers.db'):
+            conn = sqlite3.connect('./data/papers.db')
+            cur = conn.cursor()
+            cur.execute('SELECT COUNT(*) FROM papers')
+            count = cur.fetchone()[0]
+            logger.info(f'✓ Database accessible, {count} papers')
+            conn.close()
+        else:
+            logger.warning('⚠ No database found')
+        
+        # Check FAISS index
+        if os.path.exists('./data/faiss.index'):
+            logger.info('✓ FAISS index file exists')
+        else:
+            logger.warning('⚠ No FAISS index found')
+        
+        # Check metadata
+        if os.path.exists('./data/metadata.json'):
+            logger.info('✓ Metadata file exists')
+        else:
+            logger.warning('⚠ No metadata file found')
+        
+        logger.info('🎉 Health check completed')
+        "
+    
+    - name: Run Sample Queries
+      if: github.event.inputs.task == 'run-sample-queries'
+      run: |
+        echo "❓ Running sample queries..."
+        
+        # Ensure we have data
+        python -c "
+        from app.database import init_db
+        from app.ingestion import ingest_example
+        import logging
+        
+        logging.basicConfig(level=logging.INFO)
+        
+        try:
+            init_db()
+            ingest_example()
+        except:
+            pass
+        "
+        
+        # Start server
+        uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+        SERVER_PID=$!
+        sleep 10
+        
+        # Run sample queries
+        QUERIES=(
+          "What is this paper about?"
+          "What are the main contributions?"
+          "What methodology was used?"
+          "What are the key findings?"
+        )
+        
+        for query in "${QUERIES[@]}"; do
+          echo "🔍 Query: $query"
+          curl -s -X POST "http://127.0.0.1:8000/qa" \
+            -H "Content-Type: application/json" \
+            -d "{\"question\":\"$query\",\"top_k\":3,\"temperature\":0.1}" \
+            | python -c "
+            import sys, json
+            try:
+                data = json.load(sys.stdin)
+                print(f'Answer: {data.get(\"answer\", \"No answer\")}')
+                print('---')
+            except:
+                print('Failed to parse response')
+            " || echo "Query failed"
+        done
+        
+        # Clean up
+        kill $SERVER_PID || true
+    
+    - name: Upload task results
+      uses: actions/upload-artifact@v3
+      with:
+        name: task-results-${{ github.event.inputs.task }}-${{ github.run_number }}
+        path: |
+          data/
+          backups/
+          logs/
+        retention-days: 7
+      if: always()
+    
+    - name: Task summary
+      run: |
+        echo "## 🔧 Task Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Task**: ${{ github.event.inputs.task }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Provider**: ${{ github.event.inputs.provider }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: Completed" >> $GITHUB_STEP_SUMMARY

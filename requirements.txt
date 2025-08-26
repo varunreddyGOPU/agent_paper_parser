@@ -6,6 +6,7 @@ python-dotenv>=1.0.1
 # PDF parsing (choose at least one; both included here)
 pypdf>=4.2.0
 pdfminer.six>=20231228
+PyMuPDF>=1.23.0
 
 # Embeddings + Index
 sentence-transformers>=2.6.0

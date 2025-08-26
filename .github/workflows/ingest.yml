@@ -1,0 +1,194 @@
+name: Scheduled PDF Ingestion
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      pdf_urls:
+        description: 'PDF URLs to ingest (one per line)'
+        required: false
+        default: |
+          https://arxiv.org/pdf/1706.03762.pdf
+          https://arxiv.org/pdf/1810.04805.pdf
+        type: string
+      rebuild_index:
+        description: 'Rebuild the FAISS index'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install PyMuPDF
+    
+    - name: Create data directory
+      run: |
+        mkdir -p data downloads
+    
+    - name: Initialize database
+      run: |
+        python run_init_db.py
+        echo "✓ Database initialized"
+    
+    - name: Run sample ingestion
+      run: |
+        # Set environment variable to enable ingestion
+        export INGEST_ON_STARTUP=1
+        
+        # Run ingestion via Python
+        python -c "
+        import os
+        import logging
+        from app.database import init_db
+        from app.ingestion import ingest_example
+        
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        try:
+            init_db()
+            logger.info('Running scheduled ingestion...')
+            ingest_example()
+            logger.info('✅ Ingestion completed successfully')
+        except Exception as e:
+            logger.error(f'❌ Ingestion failed: {e}')
+            raise
+        "
+    
+    - name: Custom PDF ingestion
+      if: github.event.inputs.pdf_urls
+      run: |
+        echo "Processing custom PDF URLs..."
+        echo "${{ github.event.inputs.pdf_urls }}" | while read -r url; do
+          if [ -n "$url" ]; then
+            echo "Processing: $url"
+            python -c "
+            import sys
+            import logging
+            from app.ingestion import download_pdf, parse_pdf, add_to_index
+            from app.database import init_db
+            import sqlite3
+            import os
+            from urllib.parse import urlparse
+            
+            logging.basicConfig(level=logging.INFO)
+            logger = logging.getLogger(__name__)
+            
+            url = '$url'.strip()
+            if not url:
+                sys.exit(0)
+                
+            try:
+                # Generate filename from URL
+                parsed = urlparse(url)
+                filename = os.path.basename(parsed.path) or 'document.pdf'
+                if not filename.endswith('.pdf'):
+                    filename += '.pdf'
+                
+                logger.info(f'Downloading: {url}')
+                path = download_pdf(url, filename)
+                
+                logger.info(f'Parsing: {path}')
+                text = parse_pdf(path)
+                
+                # Store in database
+                init_db()
+                conn = sqlite3.connect('./data/papers.db')
+                cur = conn.cursor()
+                
+                cur.execute('INSERT INTO papers (title, url, path, abstract) VALUES (?,?,?,?)',
+                           (filename, url, path, text[:500]))
+                paper_id = cur.lastrowid
+                conn.commit()
+                conn.close()
+                
+                # Add to index
+                from app.embeddings import add_to_index
+                add_to_index(paper_id, text)
+                
+                logger.info(f'✅ Successfully processed: {filename}')
+                
+            except Exception as e:
+                logger.error(f'❌ Failed to process {url}: {e}')
+            "
+          fi
+        done
+    
+    - name: Rebuild index if requested
+      if: github.event.inputs.rebuild_index == 'true'
+      run: |
+        echo "🔄 Rebuilding FAISS index..."
+        python -c "
+        import logging
+        from app.embeddings import rebuild_index
+        
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        try:
+            rebuild_index()
+            logger.info('✅ Index rebuilt successfully')
+        except Exception as e:
+            logger.error(f'❌ Index rebuild failed: {e}')
+            raise
+        "
+    
+    - name: Archive ingestion results
+      uses: actions/upload-artifact@v3
+      with:
+        name: ingestion-results-${{ github.run_number }}
+        path: |
+          data/
+          downloads/
+        retention-days: 7
+    
+    - name: Ingestion summary
+      run: |
+        echo "## 📚 Ingestion Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -f "data/papers.db" ]; then
+          PAPER_COUNT=$(python -c "
+          import sqlite3
+          conn = sqlite3.connect('data/papers.db')
+          cur = conn.cursor()
+          cur.execute('SELECT COUNT(*) FROM papers')
+          print(cur.fetchone()[0])
+          conn.close()
+          ")
+          echo "- **Papers in database**: $PAPER_COUNT" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ -f "data/faiss.index" ]; then
+          INDEX_SIZE=$(du -h data/faiss.index | cut -f1)
+          echo "- **FAISS index size**: $INDEX_SIZE" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
+        echo "- Database and index files are available as workflow artifacts" >> $GITHUB_STEP_SUMMARY
