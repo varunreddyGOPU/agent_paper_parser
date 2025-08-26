@@ -21,9 +21,9 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt && \
-    pip install PyMuPDF
+RUN pip install --upgrade pip --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org && \
+    pip install -r requirements.txt --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org && \
+    pip install PyMuPDF --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
 
 # Copy application code
 COPY . .

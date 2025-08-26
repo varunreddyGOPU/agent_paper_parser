@@ -6,7 +6,10 @@ echo "🚀 Setting up Agent Paper Parser..."
 
 # Check Python version
 PYTHON_VERSION=$(python3 --version | grep -oE '[0-9]+\.[0-9]+')
-if [[ $(echo "$PYTHON_VERSION >= 3.9" | bc -l) -eq 0 ]]; then
+MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
+MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
+
+if [ "$MAJOR" -lt 3 ] || ([ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 9 ]); then
     echo "❌ Python 3.9+ required. Found: $PYTHON_VERSION"
     exit 1
 fi
