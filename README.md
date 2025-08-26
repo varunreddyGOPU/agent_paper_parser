@@ -3,6 +3,49 @@ Document QA with embeddings + LLM orchestration
 
 Lightweight FastAPI project that ingests PDFs, creates sentence embeddings (sentence-transformers + FAISS), and exposes a retrieval-augmented QA endpoint. It includes an LLM orchestration layer (LangChain preferred) with optional OpenAI or Google Gemini backends and optional LangFuse logging.
 
+## 🚀 Quick Start
+
+### Automated Setup (Recommended)
+```bash
+git clone https://github.com/varunreddyGOPU/agent_paper_parser.git
+cd agent_paper_parser
+./scripts/setup.sh    # Complete environment setup
+./scripts/start.sh     # Start the development server
+```
+
+### Docker Deployment
+```bash
+./scripts/docker.sh build
+./scripts/docker.sh run
+# Visit http://localhost:8000/docs
+```
+
+## 🔄 Automation & Triggers
+
+This repository includes comprehensive automation triggers for CI/CD, deployments, and maintenance. See **[TRIGGERS.md](TRIGGERS.md)** for complete documentation.
+
+**Available triggers:**
+- 🔧 **CI/CD Pipeline** - Automatic testing on push/PR
+- 🚀 **Deployment Workflow** - Automated deployments to staging/production  
+- 📚 **Scheduled Ingestion** - Daily PDF processing at 2 AM UTC
+- 🐳 **Docker Builds** - Multi-platform container images
+- 🔧 **Manual Tasks** - QA testing, index rebuilding, health checks
+
+**Quick trigger usage:**
+```bash
+# Local automation
+./scripts/setup.sh     # Complete setup
+./scripts/start.sh     # Start server  
+./scripts/ingest.sh    # Ingest PDFs
+./scripts/test.sh      # Run tests
+./scripts/docker.sh    # Docker operations
+
+# GitHub Actions (via web UI)
+# - Deploy Application (manual)
+# - Manual Tasks (various maintenance)
+# - Scheduled PDF Ingestion (daily + manual)
+```
+
 Features
 - Download & parse a sample PDF and store metadata in papers.db (SQLite).
 - Create chunked embeddings and index in FAISS (faiss.index) with metadata.json.
